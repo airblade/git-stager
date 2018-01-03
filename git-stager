@@ -1,0 +1,358 @@
+#!/usr/bin/env ruby --disable-gems
+
+# NAME
+#        git-stager - Easily add/remove files to/from the index
+#
+# SYNOPSIS
+#        git stager
+#        git stager --help
+#
+# DESCRIPTION
+#        Shows the working tree status as per `git status --short`.  You can
+#        move around the entries toggling files in and out of the index with
+#        a single key.
+#
+# COMMANDS
+#        g or H  Move to the first entry
+#
+#        M       Move to the middle entry
+#
+#        G or L  Move to the last entry
+#
+#        j       Move down one entry
+#
+#        k       Move up one entry
+#
+#        SPACE or ENTER
+#                Add an unstaged file or remove a staged file
+#
+#        q or ESCAPE
+#                Quit
+#
+
+require 'io/console'
+
+class ANSI
+  ESCAPE = 27.chr
+
+  def self.escape(sequence)
+    ESCAPE + sequence
+  end
+
+  def self.csi(sequence)
+    escape "[#{sequence}"
+  end
+
+  def self.hiding_cursor(&block)
+    print hide_cursor
+    begin
+      yield
+    ensure
+      print show_cursor
+    end
+  end
+
+  def self.clear_down
+    csi 'J'
+  end
+
+  def self.cursor_up(lines)
+    lines > 0 ? csi("#{lines}A") : ''
+  end
+
+  def self.cursor_down(lines)
+    lines > 0 ? csi("#{lines}B") : ''
+  end
+
+  def self.column(n)
+    csi "#{n}G"
+  end
+
+  def self.hide_cursor
+    csi "?25l"
+  end
+
+  def self.show_cursor
+    csi "?25h"
+  end
+
+  def self.red
+    if block_given?
+      red + yield + reset
+    else
+      csi '31m'
+    end
+  end
+
+  def self.green
+    if block_given?
+      green + yield + reset
+    else
+      csi '32m'
+    end
+  end
+
+  def self.reset
+    csi '0m'
+  end
+end
+
+
+# TODO I'm sure the colour logic isn't quite right
+# also how to handle `toggle()`.
+class Entry
+  def initialize(line)
+    @line = line
+  end
+
+  def render
+    #    X          Y     Meaning
+    #    -------------------------------------------------
+    #              [MD]   not updated
+    #    M        [ MD]   updated in index
+    #    A        [ MD]   added to index
+    #    D         [ M]   deleted from index
+    #    R        [ MD]   renamed in index
+    #    C        [ MD]   copied in index
+    #    [MARC]           index and work tree matches
+    #    [ MARC]     M    work tree changed since index
+    #    [ MARC]     D    deleted in work tree
+    #    -------------------------------------------------   <- TODO is the section below for merge conflicts?
+    #    D           D    unmerged, both deleted
+    #    A           U    unmerged, added by us
+    #    U           D    unmerged, deleted by them
+    #    U           A    unmerged, added by them
+    #    D           U    unmerged, deleted by us
+    #    A           A    unmerged, both added
+    #    U           U    unmerged, both modified
+    #    -------------------------------------------------
+    #    ?           ?    untracked
+    #    !           !    ignored
+    #    -------------------------------------------------
+
+    raise 'not sure how to display colours for, and/or stage, merge conflicts' if merge_conflict?
+
+    out = staged? ?
+      ANSI.green { index_status } :
+      ANSI.red   { index_status }
+
+    out += ANSI.red { worktree_status }
+
+    out += " #{path}"
+  end
+
+  def toggle
+    staged? ? unstage : stage unless merge_conflict?
+  end
+
+  def stage
+    cmd = "git add #{path}"
+    system(cmd) or raise("unable to '#{cmd}'")
+  end
+
+  def unstage
+    path.split(' -> ').reverse.each do |p|
+      cmd = "git reset -q -- #{p}"
+      system(cmd) or raise("unable to '#{cmd}'")
+    end
+  end
+
+  private
+
+  attr_reader :line
+
+  def merge_conflict?
+    index_status == 'U'                             ||
+    worktree_status == 'U'                          ||
+    (index_status == 'A' && worktree_status == 'A') ||
+    (index_status == 'D' && worktree_status == 'D')
+  end
+
+  def staged?
+    # index_status.match? /[MADRCU]/  # match? is ruby 2.4
+    !! (index_status =~ /[MADRC]/)
+  end
+
+  def index_status
+    line[0]
+  end
+
+  def worktree_status
+    line[1]
+  end
+
+  def path
+    line[3..-1]
+  end
+end
+
+
+class Entries
+  def initialize
+    @cursor = 0  # first row
+  end
+
+  def refresh
+    @entries = nil
+    entries
+    bottom if @cursor >= count
+    self
+  end
+
+  def count
+    entries.length
+  end
+
+  def render
+    entries.each_with_index do |entry, index|
+      print "#{cursor == index ? '>' : ' '} #{entry.render}"
+      # Do not terminate final entry with a newline.
+      print "\n" unless index == count - 1
+    end
+  end
+
+  def toggle
+    current_entry.toggle
+  end
+
+  def down
+    @cursor += 1 if @cursor + 1 < count
+  end
+
+  def up
+    @cursor -= 1 if @cursor > 0
+  end
+
+  def top
+    @cursor = 0
+  end
+
+  def bottom
+    @cursor = count - 1
+  end
+
+  def middle
+    @cursor = count / 2
+  end
+
+  private
+
+  attr_reader :cursor
+
+  def entries
+    @entries ||= parse(git_status)
+  end
+
+  def current_entry
+    entries[@cursor]
+  end
+
+  def git_status
+    `git status --porcelain`
+  end
+
+  def parse(status)
+    status.split("\n").map { |line| Entry.new line }
+  end
+end
+
+
+# The part of the screen we are rendering on.
+class Screen
+  def render(entries)
+    @height = entries.count
+
+    clear_down
+    entries.render
+    to_first_row
+  end
+
+  def clear_down
+    print ANSI.clear_down
+  end
+
+  def to_first_row
+    # Final entry is not terminated with a newline.
+    print ANSI.column 1
+    print ANSI.cursor_up(@height - 1)
+  end
+
+  def to_below_last_row
+    # Terminate the final line of output with a newline.
+    # The newline (instead of moving the cursor down 1 more line)
+    # ensures we scroll when at bottom of screen.
+    print ANSI.cursor_down(@height - 1) + "\n" if @height > 0
+  end
+end
+
+
+class Stager
+  def call
+    @entries = Entries.new
+    @screen = Screen.new
+    @done = false
+
+    ANSI.hiding_cursor do
+      until done
+        screen.render entries.refresh
+        if entries.count.zero?
+          @done = true
+        else
+          handle_key wait_for_key
+        end
+      end
+
+      screen.to_below_last_row
+    end
+  end
+
+  private
+
+  attr_reader :entries, :screen, :done
+
+  ESCAPE = 27.chr
+  ENTER  = 13.chr
+  CTRL_C = 3.chr
+
+  def wait_for_key
+    $stdin.getch
+  end
+
+  def handle_key(key)
+    case key
+    when 'g', 'H'
+      entries.top
+    when 'G', 'L'
+      entries.bottom
+    when 'M'
+      entries.middle
+    when 'j'
+      entries.down
+    when 'k'
+      entries.up
+    when ' ', ENTER
+      entries.toggle
+    when 'q', ESCAPE, CTRL_C
+      quit
+    end
+  end
+
+  def quit
+    @done = true
+  end
+end
+
+
+if %w[--help -h].include? ARGV[0]
+  File.readlines(__FILE__).drop(2).each do |line|
+    if line =~ /^#/
+      puts line.sub(/^# ?/, '')
+    else
+      exit
+    end
+  end
+end
+
+
+Stager.new.call
+
