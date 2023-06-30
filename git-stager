@@ -148,19 +148,19 @@ class Entry
   end
 
   def stage
-    cmd = "git add #{path}"
+    cmd = "git add #{relative(path)}"
     system(cmd) or raise("unable to '#{cmd}'")
   end
 
   def unstage
     path.split(' -> ').reverse.each do |p|
-      cmd = "git reset -q -- #{p}"
+      cmd = "git reset -q -- #{relative(p)}"
       system(cmd) or raise("unable to '#{cmd}'")
     end
   end
 
   def open
-    system("open #{path}")
+    system("open #{relative(path)}")
   end
 
   private
@@ -189,6 +189,14 @@ class Entry
 
   def path
     line[3..-1]
+  end
+
+  def relative(path_in_repo)
+    "#{cdup}#{path_in_repo}"
+  end
+
+  def cdup
+    `git rev-parse --show-cdup`.chomp
   end
 end
 
