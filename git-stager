@@ -25,6 +25,8 @@
 #
 #        o       Open the current file
 #
+#        d       Toggle a diff of the current file
+#
 #        SPACE or ENTER
 #                Add an unstaged file or remove a staged file
 #
@@ -103,6 +105,8 @@ end
 # TODO I'm sure the colour logic isn't quite right
 # also how to handle `toggle()`.
 class Entry
+  attr_reader :line
+
   def initialize(line)
     @line = line
   end
@@ -163,9 +167,23 @@ class Entry
     system("open #{relative(path)}")
   end
 
-  private
+  def diff
+    Diff.new `git diff --color #{'--staged' if staged?} #{relative(path)}`
+  end
 
-  attr_reader :line
+  def ==(other)
+    line == other.line
+  end
+
+  def eql?(other)
+    self == other
+  end
+
+  def hash
+    line.hash
+  end
+
+  private
 
   def merge_conflict?
     index_status == 'U'                             ||
@@ -201,9 +219,29 @@ class Entry
 end
 
 
+class Diff
+  def initialize(diff)
+    @diff = diff
+  end
+
+  def render
+    puts diff
+  end
+
+  def length
+    diff.lines.length
+  end
+
+  private
+
+  attr_reader :diff
+end
+
+
 class Entries
   def initialize
     @cursor = 0  # first row
+    @diffed_entry = nil
   end
 
   def refresh
@@ -231,6 +269,15 @@ class Entries
 
   def open
     current_entry.open
+  end
+
+  def toggle_diff
+    if @diffed_entry == current_entry
+      @diffed_entry = nil
+    else
+      @diffed_entry = current_entry
+      current_entry.diff
+    end
   end
 
   def down
@@ -277,10 +324,15 @@ end
 
 # The part of the screen we are rendering on.
 class Screen
-  def render(entries)
+  def render(entries, diff = nil)
     @height = entries.count
 
     clear_down
+    if diff
+      @height += diff.length + 1
+      diff.render
+      puts
+    end
     entries.render
     to_first_row
   end
@@ -308,11 +360,12 @@ class Stager
   def call
     @entries = Entries.new
     @screen = Screen.new
+    @diff = nil
     @done = false
 
     ANSI.hiding_cursor do
       until done
-        screen.render entries.refresh
+        screen.render entries.refresh, diff
         if entries.count.zero?
           @done = true
         else
@@ -326,7 +379,7 @@ class Stager
 
   private
 
-  attr_reader :entries, :screen, :done
+  attr_reader :entries, :screen, :diff, :done
 
   ESCAPE = 27.chr
   ENTER  = 13.chr
@@ -351,6 +404,8 @@ class Stager
     when 'o'
       entries.open
       quit
+    when 'd'
+      @diff = entries.toggle_diff
     when ' ', ENTER
       entries.toggle
     when 'q', ESCAPE, CTRL_C
