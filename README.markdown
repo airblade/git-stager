@@ -9,6 +9,7 @@ git-stager supports these keys:
 - `G` or `L` - Move to the last entry
 - `j` - Move down one entry
 - `k` - Move up one entry
+- `o` - Open the current file
 - `SPACE` or `ENTER` - Add an unstaged file or remove a staged file
 - `q` or `ESCAPE` - Quit
 

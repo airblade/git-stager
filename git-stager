@@ -23,6 +23,8 @@
 #
 #        k       Move up one entry
 #
+#        o       Open the current file
+#
 #        SPACE or ENTER
 #                Add an unstaged file or remove a staged file
 #
@@ -157,6 +159,10 @@ class Entry
     end
   end
 
+  def open
+    system("open #{path}")
+  end
+
   private
 
   attr_reader :line
@@ -213,6 +219,10 @@ class Entries
 
   def toggle
     current_entry.toggle
+  end
+
+  def open
+    current_entry.open
   end
 
   def down
@@ -330,6 +340,9 @@ class Stager
       entries.down
     when 'k'
       entries.up
+    when 'o'
+      entries.open
+      quit
     when ' ', ENTER
       entries.toggle
     when 'q', ESCAPE, CTRL_C
